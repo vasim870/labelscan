@@ -1,0 +1,42 @@
+{
+  "name": "LabelScan - AI Legal Metrology Platform",
+  "short_name": "LabelScan",
+  "description": "AI Legal Metrology compliance platform with Hyderabad violation map and 1-click legal notice generator.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070B14",
+  "theme_color": "#070B14",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/assets/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Scan Packet",
+      "short_name": "Scanner",
+      "description": "Audit a pre-packaged commodity with camera or photo",
+      "url": "/#scanner",
+      "icons": [{ "src": "/assets/icon.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "Hyderabad Map",
+      "short_name": "Map",
+      "description": "View crowdsourced store violations in Hyderabad",
+      "url": "/#map",
+      "icons": [{ "src": "/assets/icon.svg", "sizes": "96x96" }]
+    },
+    {
+      "name": "Legal Notice",
+      "short_name": "Notice",
+      "description": "Generate Section 36 Form 1 Legal Notice",
+      "url": "/#notice",
+      "icons": [{ "src": "/assets/icon.svg", "sizes": "96x96" }]
+    }
+  ],
+  "categories": ["utilities", "government", "productivity"]
+}

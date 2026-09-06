@@ -1,0 +1,16 @@
+node_modules/
+.DS_Store
+*.log
+
+# Flutter & Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+flutter_app/build/
+flutter_app/.dart_tool/
+
+# Firebase
+.firebase/
+firebase-debug.log
