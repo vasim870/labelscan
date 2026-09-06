@@ -1,0 +1,9 @@
+{
+  "name": "labelscan",
+  "version": "1.0.0",
+  "description": "LabelScan - AI Legal Metrology Compliance Platform",
+  "scripts": {
+    "build": "echo 'Static build ready'",
+    "start": "node server.js"
+  }
+}

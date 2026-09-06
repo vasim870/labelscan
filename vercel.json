@@ -1,6 +1,9 @@
 {
   "version": 2,
   "name": "labelscan",
+  "framework": null,
+  "buildCommand": null,
+  "outputDirectory": ".",
   "cleanUrls": true,
   "headers": [
     {
