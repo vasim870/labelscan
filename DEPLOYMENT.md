@@ -23,7 +23,28 @@ The repository includes a ready-to-run GitHub Actions workflow at [`.github/work
 
 ---
 
-## 2. Firebase Hosting Deployment
+## 2. Vercel Deployment (One-Click or CLI)
+
+The project includes a ready-to-use [`vercel.json`](vercel.json) file with custom routing, PWA headers, and CDN caching.
+
+### Option A: 1-Click GitHub Import (Permanent)
+1. Push this project to GitHub.
+2. Go to **[vercel.com/new](https://vercel.com/new)** and click **"Continue with GitHub"**.
+3. Select your `labelscan` repository and click **"Deploy"**.
+4. Vercel will deploy your app to `https://labelscan.vercel.app` with free SSL and automatic updates on every push.
+
+### Option B: Deploy via Vercel CLI
+Run the following in your terminal:
+```bash
+npx -y vercel
+```
+- Select your Vercel account or log in via browser.
+- Accept default settings (`Set up and deploy? [Y/n]` $\rightarrow$ `Y`).
+- Vercel will output your live URL immediately.
+
+---
+
+## 3. Firebase Hosting Deployment
 
 The repository includes [`firebase.json`](firebase.json) and [`.firebaserc`](.firebaserc) pre-configured with PWA headers, caching, and single-page routing.
 
