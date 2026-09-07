@@ -208,29 +208,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Test packet chips
-          const Text('Pre-loaded FMCG Test Cases:', style: TextStyle(color: Color(0xFFC4B5FD), fontSize: 12, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: ComplianceEngine.sampleCommodities.map((item) {
-                final isSelected = _currentCommodity.id == item.id;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(item.name.split(" ")[0] + " " + item.name.split(" ")[1]),
-                    selected: isSelected,
-                    selectedColor: const Color(0xFF00F0FF).withOpacity(0.2),
-                    side: BorderSide(color: isSelected ? const Color(0xFF00F0FF) : const Color(0xFF1E293B)),
-                    onSelected: (_) => _switchCommodity(item),
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-          const SizedBox(height: 16),
-
           // Audit Summary Card
           Container(
             padding: const EdgeInsets.all(16),

@@ -8,7 +8,7 @@ The native Flutter mobile app implementation of **LabelScan** brings Legal Metro
 
 ### Features
 1. **Camera Inspection & Label Zones Viewfinder**: Overlays bounding boxes on product panels with instant color-coded compliance status (Green for Pass, Red for Tampered Dual-MRP stickers).
-2. **Pre-loaded FMCG Demonstration Cases**: Fast-switch between compliant vs dual-MRP vs missing USP items for judge reviews.
+2. **Real-Time Camera & Photo Upload Auditing**: Genuinely audits physical pre-packaged commodities with Legal Metrology rule validation.
 3. **Crowdsourced Hyderabad Store Violation GIS Feed**: View local retail violations with community verifications.
 4. **1-Click Legal Notice Generator**: Pre-fills official Form 1 notice under Section 36 of Legal Metrology Act, 2009.
 5. **Role-Based HUD**: Instant toggle between Citizen Mode ("Am I Being Cheated?" USP calculator) and Inspector HUD (seizure notice queues).
