@@ -18,9 +18,46 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer((req, res) => {
-  let reqPath = decodeURI(req.url.split('?')[0]);
-  if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
+  const urlParts = req.url.split('?');
+  let reqPath = decodeURI(urlParts[0]);
 
+  // Handle Backend API Routes (/api/...)
+  if (reqPath.startsWith('/api/')) {
+    const routeName = reqPath.replace(/^\/api\//, '').replace(/\.js$/, '');
+    const apiFilePath = path.join(BASE_DIR, 'api', `${routeName}.js`);
+
+    if (fs.existsSync(apiFilePath)) {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', () => {
+        try {
+          if (bodyData) {
+            req.body = JSON.parse(bodyData);
+          }
+        } catch (_) {
+          req.body = bodyData;
+        }
+
+        try {
+          // Delete require cache in development for instant hot updates
+          delete require.cache[require.resolve(apiFilePath)];
+          const handler = require(apiFilePath);
+          return handler(req, res);
+        } catch (apiErr) {
+          console.error("API execution error:", apiErr);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ error: apiErr.message }));
+        }
+      });
+      return;
+    } else {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: `API route /api/${routeName} not found` }));
+    }
+  }
+
+  // Handle Static File Serving
+  if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
   const filePath = path.join(BASE_DIR, reqPath);
 
   // Prevent directory traversal

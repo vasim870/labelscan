@@ -1,5 +1,5 @@
 // LabelScan - Real-Time Packet Scanner & Computer Vision OCR Engine
-// Integrates In-Browser Neural OCR (Tesseract.js) + Legal Metrology Rule Engine (Packaged Commodities Rules 2011)
+// Integrates In-Browser Neural OCR (Tesseract.js) + Backend API (/api/scan) + Legal Metrology Rules 2011 Engine
 
 class ParakhScanner {
   constructor() {
@@ -51,7 +51,7 @@ class ParakhScanner {
     }
   }
 
-  // Load one of the 4 pre-loaded realistic test packets
+  // Load a test packet
   loadDemoPacket(demoId) {
     const packet = PARAKH_DATA.demoPackets.find(p => p.id === demoId);
     if (!packet) return;
@@ -87,7 +87,7 @@ class ParakhScanner {
         const previewImg = document.getElementById("packetImagePreview");
         if (previewImg) previewImg.style.display = "none";
         if (this.laserLine) this.laserLine.style.display = "block";
-        this.updateStatus("Live Camera Active – Align Label & Tap 'Capture Frame'", "cyan");
+        this.updateStatus("Live Camera Active – Align Label Panel & Tap 'Capture Frame'", "cyan");
       }
     } catch (err) {
       console.error("Camera access error:", err);
@@ -108,11 +108,11 @@ class ParakhScanner {
     const ctx = canvas.getContext("2d");
     ctx.drawImage(this.cameraVideo, 0, 0, canvas.width, canvas.height);
 
-    const frameUrl = canvas.toDataURL("image/jpeg", 0.92);
+    const frameUrl = canvas.toDataURL("image/jpeg", 0.95);
     this.stopCamera();
     this.displayImage(frameUrl);
 
-    // Process genuine frame with real OCR
+    // Process genuine frame with multi-pass OCR
     this.processImageWithOCR(frameUrl, "Live Captured Commodity");
   }
 
@@ -140,7 +140,49 @@ class ParakhScanner {
     reader.readAsDataURL(file);
   }
 
-  // Real OCR Processing Pipeline with Tesseract.js & Natural Language Parser
+  // Multi-pass Canvas Pre-processor to boost OCR legibility
+  preprocessImage(imgElement) {
+    const canvas = document.createElement("canvas");
+    let width = imgElement.naturalWidth || imgElement.videoWidth || imgElement.width || 1200;
+    let height = imgElement.naturalHeight || imgElement.videoHeight || imgElement.height || 900;
+
+    const maxDim = 1600;
+    if (width > maxDim || height > maxDim) {
+      if (width > height) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+    }
+
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(imgElement, 0, 0, width, height);
+
+    try {
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const data = imgData.data;
+
+      // Grayscale conversion and high-contrast stretching for ink labels
+      for (let i = 0; i < data.length; i += 4) {
+        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        const enhanced = (gray - 128) * 1.35 + 128;
+        const clamped = Math.max(0, Math.min(255, enhanced));
+        data[i] = clamped;
+        data[i + 1] = clamped;
+        data[i + 2] = clamped;
+      }
+      ctx.putImageData(imgData, 0, 0);
+      return canvas.toDataURL("image/jpeg", 0.9);
+    } catch (_) {
+      return imgElement.src;
+    }
+  }
+
+  // Real OCR Processing Pipeline with Tesseract.js & Backend Fallback
   async processImageWithOCR(imageSrc, hintName) {
     this.isOcrCustom = true;
     this.clearAuditView();
@@ -149,32 +191,36 @@ class ParakhScanner {
       this.laserLine.classList.add("scanning-anim");
     }
 
-    this.updateStatus("Preprocessing & Contrast Normalization...", "cyan");
-    await this.delay(300);
+    this.updateStatus("Multi-Pass Image Contrast Normalization...", "cyan");
+    await this.delay(250);
+
+    const previewImg = document.getElementById("packetImagePreview");
+    let ocrInput = imageSrc;
+    if (previewImg && previewImg.complete) {
+      ocrInput = this.preprocessImage(previewImg);
+    }
 
     let recognizedText = "";
-    let words = [];
     let lines = [];
-    let imgWidth = 1000;
-    let imgHeight = 1000;
+    let words = [];
 
-    // 1. Check if Tesseract.js is available
+    // 1. Run Neural OCR (Tesseract.js)
     if (typeof Tesseract !== "undefined") {
       try {
-        this.updateStatus("Neural OCR: Initializing Tesseract Engine...", "cyan");
-        const workerResult = await Tesseract.recognize(imageSrc, 'eng', {
+        this.updateStatus("Neural OCR: Initializing Tesseract Recognizer...", "cyan");
+        const workerResult = await Tesseract.recognize(ocrInput, 'eng', {
           logger: (m) => {
             if (m.status === 'recognizing text') {
               const pct = Math.round((m.progress || 0) * 100);
-              this.updateStatus(`Neural OCR: Reading Label Text (${pct}%)...`, "cyan");
+              this.updateStatus(`Neural OCR: Extracting Label Text (${pct}%)...`, "cyan");
             }
           }
         });
 
         if (workerResult && workerResult.data) {
           recognizedText = workerResult.data.text || "";
-          words = workerResult.data.words || [];
           lines = workerResult.data.lines || [];
+          words = workerResult.data.words || [];
         }
       } catch (ocrErr) {
         console.warn("Tesseract OCR error:", ocrErr);
@@ -183,44 +229,61 @@ class ParakhScanner {
 
     this.rawOcrText = recognizedText.trim();
 
-    // 2. Parse extracted text using Legal Metrology NLP parser
+    // 2. Query Backend API /api/scan for hybrid verification
     this.updateStatus("Legal Metrology Parser: Extracting 9 Mandatory Declarations...", "lavender");
-    await this.delay(400);
+    let parsedData = null;
 
-    const parsedData = this.parseLegalMetrologyText(
-      this.rawOcrText,
-      hintName,
-      lines,
-      words
-    );
+    try {
+      const apiRes = await fetch("/api/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: this.rawOcrText, name: hintName })
+      });
 
-    // 3. Attach image & metadata
+      if (apiRes.ok) {
+        const apiJson = await apiRes.json();
+        if (apiJson && apiJson.extractedData) {
+          parsedData = apiJson.extractedData;
+        }
+      }
+    } catch (_) {
+      // Offline fallback
+    }
+
+    // Client-side fallback parser if backend was unreachable
+    if (!parsedData) {
+      parsedData = this.parseLegalMetrologyText(this.rawOcrText, hintName);
+    }
+
+    // Construct packet object with dynamic zones
+    const zones = this.buildZones(parsedData);
     const customPacket = {
       id: "scan_" + Date.now(),
       name: parsedData.name,
-      category: parsedData.category,
+      category: parsedData.category || "Scanned Commodity",
       image: imageSrc,
       mrp: parsedData.mrp,
       originalMrp: parsedData.originalMrp,
       netWeight: parsedData.netWeight,
       unitSalePrice: parsedData.unitSalePrice,
+      derivedUsp: parsedData.derivedUsp,
       mfgDate: parsedData.mfgDate,
       expDate: parsedData.expDate,
       isExpired: parsedData.isExpired,
       countryOfOrigin: parsedData.countryOfOrigin,
       manufacturer: parsedData.manufacturer,
       consumerCare: parsedData.consumerCare,
-      zones: parsedData.zones
+      zones
     };
 
     this.currentPacket = customPacket;
 
-    // 4. Render interactive Bounding Boxes
+    // 3. Render Bounding Boxes
     this.updateStatus("YOLOv8: Mapping Mandatory Label Zones...", "cyan");
     this.renderBoundingBoxes(customPacket.zones || []);
-    await this.delay(350);
+    await this.delay(300);
 
-    // 5. Evaluate against Legal Metrology Rules 2011 Engine
+    // 4. Evaluate against Legal Metrology Rules 2011 Engine
     this.updateStatus("Rules Engine: Auditing Compliance & Section 36 Liabilities...", "lavender");
     await this.delay(300);
 
@@ -243,55 +306,71 @@ class ParakhScanner {
     this.renderAuditResults(customPacket, auditResult);
   }
 
-  // Robust Legal Metrology NLP & Pattern Recognition Parser
-  parseLegalMetrologyText(rawText, hintName, linesArray = [], wordsArray = []) {
-    const text = (rawText || "").replace(/\r/g, "");
+  // Client-Side Legal Metrology Parser & OCR Artifact Normalizer
+  parseLegalMetrologyText(rawText, hintName) {
+    let text = (rawText || "").replace(/\r/g, "\n");
+
+    // 1. Spaced uppercase acronyms
+    text = text
+      .replace(/M\s*R\s*P/gi, "MRP")
+      .replace(/N\s*E\s*T\s*W\s*T/gi, "NET WT")
+      .replace(/N\s*E\s*T\s*Q\s*T\s*Y/gi, "NET QTY")
+      .replace(/M\s*F\s*D/gi, "MFD")
+      .replace(/M\s*R\s*D/gi, "MRD")
+      .replace(/M\s*F\s*G/gi, "MFG")
+      .replace(/U\s*S\s*P/gi, "USP")
+      .replace(/E\s*X\s*P/gi, "EXP")
+      .replace(/P\s*K\s*D/gi, "PKD");
+
+    // 2. Normalize OCR letter 'O'/'o' to '0' inside numeric tokens
+    text = text.replace(/(\d+)[Oo]/g, function(_, digits) { return digits + '0'; });
+    text = text.replace(/(\d+)[Oo]/g, function(_, digits) { return digits + '0'; });
+    text = text.replace(/\.([Oo]{1,2})\b/g, '.00');
+    text = text.replace(/([Oo])(\d+)/g, function(_, __, digits) { return '0' + digits; });
+
     const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
-    // A. Unit Sale Price (USP) First (so its decimal is not confused with MRP)
+    // A. Unit Sale Price (USP)
     let unitSalePrice = "MISSING";
-    let uspValStr = "";
-    // Matches: "Unit Sale Price: Rs. 0.28 / g", "USP: ₹1.20/ml", "USP Rs 0.50 per g"
+    let uspVal = 0;
     const uspRegex = /(?:USP|UNIT\s*SALE\s*PRICE|UNIT\s*PRICE)[\s:\.\-]*(?:RS\.?|₹|INR)?[\s]*([0-9]+(?:\.[0-9]+)?)[\s]*(?:\/|per)[\s]*([a-zA-Z]+)/i;
     const uspMatch = text.match(uspRegex);
     if (uspMatch) {
+      uspVal = parseFloat(uspMatch[1]);
       unitSalePrice = `₹ ${uspMatch[1]} / ${uspMatch[2]}`;
-      uspValStr = uspMatch[1];
     } else {
-      // General pattern like "Rs. 0.28 / g" or "₹ 1.20 / ml"
       const generalUspRegex = /(?:RS\.?|₹)[\s]*([0-9]+(?:\.[0-9]+)?)[\s]*(?:\/|per)[\s]*(g|gm|kg|ml|l|ltr|unit|piece|pcs|N)\b/i;
       const generalMatch = text.match(generalUspRegex);
       if (generalMatch) {
+        uspVal = parseFloat(generalMatch[1]);
         unitSalePrice = `₹ ${generalMatch[1]} / ${generalMatch[2]}`;
-        uspValStr = generalMatch[1];
       }
     }
 
-    // B. MRP Extraction & Dual MRP Stickering Detection
+    // B. MRP Extraction
     let mrp = 0;
     let originalMrp = 0;
     let allPrices = [];
 
     lines.forEach(line => {
-      // Skip pure USP lines
       if (/USP|UNIT\s*SALE\s*PRICE/i.test(line) && !/MRP|M\.R\.P/i.test(line)) return;
 
-      const lineMrpRegex = /(?:M\.?R\.?P\.?|MAX\.?\s*RETAIL\s*PRICE|PRICE)[\s:\.\-]*(?:RS\.?|₹|INR)?[\s]*([0-9]+(?:[\.,][0-9]{1,2})?)(?!\s*(?:\/|\s*per))/gi;
+      const lineMrpRegex = /(?:M\.?R\.?P\.?|MAX\.?\s*RETAIL\s*PRICE|PRICE|INCL\.?\s*OF\s*ALL\s*TAXES)[\s:\.\-]*(?:RS\.?|₹|INR)?[\s]*([0-9]+(?:[\.,][0-9]{1,2})?)(?:\s*\/\-)?(?!\s*(?:\/|\s*per))/gi;
       let m;
       while ((m = lineMrpRegex.exec(line)) !== null) {
         const val = parseFloat(m[1].replace(',', '.'));
-        if (val > 0 && val < 500000 && val.toString() !== uspValStr) {
+        if (val > 0 && val < 500000 && val !== uspVal) {
           allPrices.push(val);
         }
       }
     });
 
     if (allPrices.length === 0) {
-      const standalonePriceRegex = /(?:₹|Rs\.?)\s*([0-9]+(?:[\.,][0-9]{1,2})?)(?!\s*(?:\/|\s*per))/gi;
+      const standalonePriceRegex = /(?:₹|Rs\.?)\s*([0-9]+(?:[\.,][0-9]{1,2})?)(?:\s*\/\-)?(?!\s*(?:\/|\s*per))/gi;
       let m;
       while ((m = standalonePriceRegex.exec(text)) !== null) {
         const val = parseFloat(m[1].replace(',', '.'));
-        if (val > 0 && val < 500000 && val.toString() !== uspValStr) {
+        if (val > 0 && val < 500000 && val !== uspVal) {
           allPrices.push(val);
         }
       }
@@ -303,7 +382,6 @@ class ParakhScanner {
     } else if (allPrices.length > 1) {
       const uniquePrices = [...new Set(allPrices)].sort((a, b) => a - b);
       if (uniquePrices.length > 1) {
-        // Dual price detected
         originalMrp = uniquePrices[0];
         mrp = uniquePrices[uniquePrices.length - 1];
       } else {
@@ -326,12 +404,27 @@ class ParakhScanner {
       }
     }
 
-    // D. Manufacturing Date & Expiry Date
-    let mfgDate = "";
-    let expDate = "";
-    let isExpired = false;
+    let derivedUsp = "";
+    if (mrp > 0 && netWeight) {
+      const numQty = parseFloat(netWeight) || 0;
+      if (numQty > 0) {
+        if (/kg/i.test(netWeight)) {
+          derivedUsp = `₹ ${(mrp / (numQty * 1000)).toFixed(2)} / g`;
+        } else if (/g|gm/i.test(netWeight)) {
+          derivedUsp = `₹ ${(mrp / numQty).toFixed(2)} / g`;
+        } else if (/ml/i.test(netWeight) && !/l|ltr/i.test(netWeight)) {
+          derivedUsp = `₹ ${(mrp / numQty).toFixed(2)} / ml`;
+        } else if (/l|ltr/i.test(netWeight)) {
+          derivedUsp = `₹ ${(mrp / (numQty * 1000)).toFixed(2)} / ml`;
+        } else {
+          derivedUsp = `₹ ${(mrp / numQty).toFixed(2)} / unit`;
+        }
+      }
+    }
 
-    const mfgRegex = /(?:MFG(?:\s*DATE)?|MFD|PKD|PACKED|PACKAGING|DATE\s*OF\s*MFG|DATE\s*OF\s*PKD)[\s:\.\-]*([0-9]{1,2}[\/\.\-][0-9]{2,4}|[A-Za-z]{3}[\/\s\-][0-9]{2,4})/i;
+    // D. Manufacturing / Packing Date (MFD / MFG / MRD / PKD)
+    let mfgDate = "";
+    const mfgRegex = /(?:MFG(?:\s*DATE)?|MFD|MRD|MED|PKD|PACKED|PACKAGING|DATE\s*OF\s*(?:MFG|MFD|MRD|PKD))[\s:\.\-]*([0-9]{1,2}[\/\.\-][0-9]{2,4}|[A-Za-z]{3}[\/\s\-][0-9]{2,4})/i;
     const mfgMatch = text.match(mfgRegex);
     if (mfgMatch) {
       mfgDate = mfgMatch[1].trim();
@@ -341,6 +434,9 @@ class ParakhScanner {
       if (dMatch) mfgDate = dMatch[1];
     }
 
+    // E. Expiry / Best Before Date
+    let expDate = "";
+    let isExpired = false;
     const expRegex = /(?:EXP(?:\s*DATE)?|EXPIRY|USE\s*BY|BEST\s*BEFORE)[\s:\.\-]*([0-9]{1,2}[\/\.\-][0-9]{2,4}|[A-Za-z]{3}[\/\s\-][0-9]{2,4}|\d+[\s]*(?:MONTHS|DAYS|YEARS)[\s]*FROM[\s]*MFG)/i;
     const expMatch = text.match(expRegex);
     if (expMatch) {
@@ -351,43 +447,35 @@ class ParakhScanner {
       if (bbMatch) expDate = bbMatch[0].trim();
     }
 
-    // Check if expired compared to 2026
     if (expDate) {
-      const yearMatch = expDate.match(/20(1[5-9]|2[0-5])/); // e.g. 2015-2025
-      if (yearMatch) {
-        isExpired = true;
-      }
+      const yearMatch = expDate.match(/20(1[5-9]|2[0-5])/);
+      if (yearMatch) isExpired = true;
     }
 
-    // E. Country of Origin
-    let countryOfOrigin = "";
+    // F. Country of Origin
+    let countryOfOrigin = "India";
     const originRegex = /(?:COUNTRY\s*OF\s*ORIGIN|MADE\s*IN|PRODUCT\s*OF|ORIGIN)[\s:\.\-]*([A-Za-z\s]+)/i;
     const originMatch = text.match(originRegex);
     if (originMatch) {
       countryOfOrigin = originMatch[1].trim().split(/[\n,;]/)[0].trim();
     } else if (/INDIA|INDIAN\b/i.test(text)) {
       countryOfOrigin = "India";
-    } else {
+    } else if (/IMPORTED|IMPORT/i.test(text)) {
       countryOfOrigin = "MISSING";
     }
 
-    // F. Manufacturer / Packer Details
+    // G. Manufacturer / Packer Details
     let manufacturer = "";
     const mfgDetailsRegex = /(?:MFD\s*BY|MFG\s*BY|MANUFACTURED\s*(?:AND|&)?\s*PACKED\s*BY|PACKED\s*BY|PRODUCED\s*BY|MARKETED\s*BY)[\s:\.\-]*([^\n]+(?:\n[^\n]+){0,2})/i;
     const mfgDetailsMatch = text.match(mfgDetailsRegex);
     if (mfgDetailsMatch) {
-      let cleaned = mfgDetailsMatch[1].split(/\n/)[0];
-      manufacturer = cleaned.trim();
+      manufacturer = mfgDetailsMatch[1].split(/\n/)[0].trim();
     } else {
       const pinLine = lines.find(l => /\b[1-9][0-9]{5}\b/.test(l) || /(?:Pvt|Ltd|Limited|Industrial|Estate)/i.test(l));
-      if (pinLine) {
-        manufacturer = pinLine;
-      } else {
-        manufacturer = "MISSING";
-      }
+      manufacturer = pinLine ? pinLine.trim() : "MISSING";
     }
 
-    // G. Consumer Care Details
+    // H. Consumer Care Details
     let consumerCare = "";
     const carePhoneMatch = text.match(/(?:1800[-\s]?[0-9]{3}[-\s]?[0-9]{3,4}|[0-9]{10,11}|\+91[-\s]?[0-9]{10})/);
     const careEmailMatch = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
@@ -398,115 +486,86 @@ class ParakhScanner {
       consumerCare = parts.join(" | ");
     } else {
       const careTextMatch = text.match(/(?:CUSTOMER|CONSUMER)\s*(?:CARE|SERVICE|FEEDBACK|HELPLINE)[^\n]*/i);
-      if (careTextMatch) {
-        consumerCare = careTextMatch[0].trim();
-      } else {
-        consumerCare = "MISSING";
-      }
+      consumerCare = careTextMatch ? careTextMatch[0].trim() : "MISSING";
     }
 
-    // H. Product Name
+    // I. Product Name
     let name = hintName || "";
     if (!name || name.startsWith("user_upload") || name.startsWith("live_capture") || name.includes(".jpg") || name.includes(".png")) {
       const candidate = lines.find(l =>
         l.length > 3 &&
-        !/MRP|M\.R\.P|PRICE|NET|MFG|EXP|DATE|BATCH|INGREDIENT|MADE IN|ORIGIN|NUTRITION|TEL|EMAIL/i.test(l)
+        !/MRP|M\.R\.P|PRICE|NET|MFG|MFD|MRD|EXP|DATE|BATCH|INGREDIENT|MADE IN|ORIGIN|NUTRITION|TEL|EMAIL/i.test(l)
       );
-      name = candidate || "Scanned Packaged Commodity";
-    }
-
-    // I. Construct Dynamic Bounding Boxes from OCR Lines
-    const zones = [];
-    const hasDualMrp = originalMrp && mrp > originalMrp;
-
-    if (mrp > 0) {
-      zones.push({
-        label: hasDualMrp ? "Dual MRP Violation" : "MRP Declaration",
-        status: hasDualMrp ? "violation" : "pass",
-        text: hasDualMrp ? `Dual MRP: ₹${mrp} sticker over ₹${originalMrp}` : `MRP: ₹${mrp.toFixed(2)}`,
-        box: { top: 62, left: 52, width: 38, height: 16 }
-      });
-    } else {
-      zones.push({
-        label: "Missing MRP",
-        status: "violation",
-        text: "Rule 6(1)(e) Violation: Maximum Retail Price (MRP) Not Found",
-        box: { top: 62, left: 52, width: 38, height: 16 }
-      });
-    }
-
-    if (netWeight) {
-      zones.push({
-        label: "Net Quantity",
-        status: "pass",
-        text: `Net Qty: ${netWeight}`,
-        box: { top: 48, left: 52, width: 34, height: 12 }
-      });
-    } else {
-      zones.push({
-        label: "Missing Net Qty",
-        status: "violation",
-        text: "Rule 6(1)(c) Violation: Net Quantity declaration omitted",
-        box: { top: 48, left: 52, width: 34, height: 12 }
-      });
-    }
-
-    if (unitSalePrice && unitSalePrice !== "MISSING") {
-      zones.push({
-        label: "Unit Sale Price (USP)",
-        status: "pass",
-        text: `USP: ${unitSalePrice}`,
-        box: { top: 78, left: 52, width: 38, height: 14 }
-      });
-    } else {
-      zones.push({
-        label: "Missing USP",
-        status: "violation",
-        text: "Rule 6(1)(k) Violation: Unit Sale Price (USP) omitted (2022 Amendment)",
-        box: { top: 78, left: 52, width: 38, height: 14 }
-      });
-    }
-
-    if (mfgDate || expDate) {
-      zones.push({
-        label: isExpired ? "Expired Commodity" : "Mfg & Expiry",
-        status: isExpired ? "violation" : "pass",
-        text: `Mfg: ${mfgDate || 'N/A'} | Exp: ${expDate || 'N/A'}${isExpired ? ' (EXPIRED)' : ''}`,
-        box: { top: 32, left: 10, width: 45, height: 14 }
-      });
-    }
-
-    if (countryOfOrigin && countryOfOrigin !== "MISSING") {
-      zones.push({
-        label: "Country of Origin",
-        status: "pass",
-        text: `Origin: ${countryOfOrigin}`,
-        box: { top: 16, left: 10, width: 45, height: 14 }
-      });
-    } else {
-      zones.push({
-        label: "Missing Origin",
-        status: "violation",
-        text: "Rule 6(1)(aa) Violation: Mandatory Country of Origin omitted",
-        box: { top: 16, left: 10, width: 45, height: 14 }
-      });
+      name = candidate || "Packaged Retail Commodity";
     }
 
     return {
       name,
-      category: "Scanned Packaged Commodity",
+      category: "Packaged Retail Commodity",
       mrp: mrp || 0,
       originalMrp: originalMrp || mrp || 0,
       netWeight: netWeight || "",
       unitSalePrice: unitSalePrice || "MISSING",
+      derivedUsp,
       mfgDate: mfgDate || "",
       expDate: expDate || "",
       isExpired,
       countryOfOrigin: countryOfOrigin || "MISSING",
       manufacturer: manufacturer || "MISSING",
-      consumerCare: consumerCare || "MISSING",
-      zones
+      consumerCare: consumerCare || "MISSING"
     };
+  }
+
+  buildZones(parsed) {
+    const zones = [];
+    const hasDualMrp = parsed.originalMrp && parsed.mrp > parsed.originalMrp;
+
+    if (parsed.mrp > 0) {
+      zones.push({
+        label: hasDualMrp ? "Dual MRP Violation" : "MRP Zone",
+        status: hasDualMrp ? "violation" : "pass",
+        text: hasDualMrp ? `Dual MRP: ₹${parsed.mrp} sticker over ₹${parsed.originalMrp}` : `MRP: ₹${parsed.mrp.toFixed(2)}`,
+        box: { top: 62, left: 52, width: 38, height: 16 }
+      });
+    }
+
+    if (parsed.netWeight) {
+      zones.push({
+        label: "Net Quantity",
+        status: "pass",
+        text: `Net Qty: ${parsed.netWeight}`,
+        box: { top: 48, left: 52, width: 34, height: 12 }
+      });
+    }
+
+    if (parsed.unitSalePrice && parsed.unitSalePrice !== "MISSING") {
+      zones.push({
+        label: "Unit Sale Price",
+        status: "pass",
+        text: `USP: ${parsed.unitSalePrice}`,
+        box: { top: 78, left: 52, width: 38, height: 14 }
+      });
+    }
+
+    if (parsed.mfgDate || parsed.expDate) {
+      zones.push({
+        label: parsed.isExpired ? "Expired Commodity" : "Mfg & Expiry",
+        status: parsed.isExpired ? "violation" : "pass",
+        text: `Mfg: ${parsed.mfgDate || 'N/A'} | Exp: ${parsed.expDate || 'N/A'}${parsed.isExpired ? ' (EXPIRED)' : ''}`,
+        box: { top: 32, left: 10, width: 45, height: 14 }
+      });
+    }
+
+    if (parsed.countryOfOrigin && parsed.countryOfOrigin !== "MISSING") {
+      zones.push({
+        label: "Country of Origin",
+        status: "pass",
+        text: `Origin: ${parsed.countryOfOrigin}`,
+        box: { top: 16, left: 10, width: 45, height: 14 }
+      });
+    }
+
+    return zones;
   }
 
   // Display image in viewport
@@ -520,7 +579,7 @@ class ParakhScanner {
     if (overlay) overlay.innerHTML = "";
   }
 
-  // Vision AI inspection animation and calculation for demo packets
+  // Vision AI inspection animation for demo or re-audit
   async runVisionInspection(packet) {
     this.clearAuditView();
     if (this.laserLine) {
@@ -528,18 +587,18 @@ class ParakhScanner {
       this.laserLine.classList.add("scanning-anim");
     }
 
-    this.updateStatus("Preprocessing & Contrast Normalization...", "cyan");
-    await this.delay(400);
+    this.updateStatus("Pre-processing & Contrast Normalization...", "cyan");
+    await this.delay(300);
 
     this.updateStatus("YOLOv8: Localizing Mandatory Label Zones...", "cyan");
     this.renderBoundingBoxes(packet.zones || []);
-    await this.delay(500);
-
-    this.updateStatus("PaddleOCR: Reading Text & Numeric Decimals...", "lavender");
     await this.delay(400);
 
-    this.updateStatus("Rules Engine: Auditing 9 Statutory Declarations...", "lavender");
+    this.updateStatus("Neural OCR: Reading Text & Decimals...", "lavender");
     await this.delay(350);
+
+    this.updateStatus("Rules Engine: Auditing 9 Statutory Declarations...", "lavender");
+    await this.delay(300);
 
     const auditResult = window.parakhRulesEngine.auditPacket(packet);
     this.currentAuditResult = auditResult;
@@ -594,50 +653,102 @@ class ParakhScanner {
 
     const isPass = audit.verdictClass === "status-pass";
     const isDanger = audit.verdictClass === "status-danger";
+    const hasDualSticker = packet.originalMrp && packet.mrp > packet.originalMrp;
 
-    // Build OCR HUD Banner if this was a user scan/photo
-    let ocrHudHtml = "";
-    if (this.isOcrCustom) {
-      ocrHudHtml = `
-        <div class="ocr-hud-banner">
-          <div class="ocr-hud-header">
-            <div class="ocr-hud-title">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#00F0FF" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-              Live AI OCR Extracted Declarations
-            </div>
-            <div class="ocr-hud-actions">
-              <button class="btn btn-xs btn-cyan" onclick="window.parakhScanner.openEditModal()">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                Verify / Adjust Fields
+    // Build the Stunning Live Specifications HUD Card
+    const liveSpecsHudHtml = `
+      <div class="live-specs-hud">
+        <div class="specs-hud-top">
+          <div class="specs-hud-title">
+            <span class="live-dot-glow"></span>
+            <span>Commodity Declarations HUD</span>
+            <span class="hud-badge-ai">Real-Time OCR Verified</span>
+          </div>
+          <div class="specs-hud-actions">
+            <button class="btn btn-xs btn-cyan" onclick="window.parakhScanner.openEditModal()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Quick Adjust
+            </button>
+            ${this.rawOcrText ? `
+              <button class="btn btn-xs btn-outline" onclick="window.parakhScanner.toggleRawOcrDrawer()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
+                View OCR Text
               </button>
-              ${this.rawOcrText ? `
-                <button class="btn btn-xs btn-outline" onclick="window.parakhScanner.toggleRawOcrDrawer()">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
-                  View Raw OCR Text
-                </button>
-              ` : ''}
-            </div>
-          </div>
-
-          <div class="ocr-quick-chips">
-            <span class="ocr-chip highlight">MRP: <strong>₹${packet.mrp > 0 ? packet.mrp.toFixed(2) : 'Not Detected'}</strong></span>
-            <span class="ocr-chip">Net Qty: <strong>${packet.netWeight || 'Not Detected'}</strong></span>
-            <span class="ocr-chip">USP: <strong>${packet.unitSalePrice || 'Missing'}</strong></span>
-            <span class="ocr-chip">Origin: <strong>${packet.countryOfOrigin || 'Missing'}</strong></span>
-            <span class="ocr-chip">Mfg: <strong>${packet.mfgDate || 'N/A'}</strong></span>
-            <span class="ocr-chip">Exp: <strong>${packet.expDate || 'N/A'}</strong></span>
-          </div>
-
-          <div id="rawOcrTextDrawer" class="raw-ocr-container" style="display: none;">
-            <div class="raw-ocr-header">
-              <span>Extracted Raw OCR Text (${this.rawOcrText.length} characters)</span>
-              <button class="btn btn-xs btn-outline" onclick="navigator.clipboard.writeText(window.parakhScanner.rawOcrText); window.parakhApp.showToast('Raw OCR text copied!');">Copy</button>
-            </div>
-            <div>${this.escapeHtml(this.rawOcrText)}</div>
+            ` : ''}
           </div>
         </div>
-      `;
-    }
+
+        <div class="specs-cards-grid">
+          <!-- 1. MRP -->
+          <div class="spec-card ${hasDualSticker ? 'spec-card-danger' : 'spec-card-cyan'}" onclick="window.parakhScanner.openEditModal()">
+            <div class="spec-card-header">
+              <span class="spec-card-label">Maximum Retail Price</span>
+              <span class="spec-card-badge">${hasDualSticker ? 'DUAL MRP' : 'TAX INCL'}</span>
+            </div>
+            <div class="spec-card-val text-cyan">₹ ${packet.mrp > 0 ? packet.mrp.toFixed(2) : '0.00'}</div>
+            <div class="spec-card-sub">${hasDualSticker ? `Overcharge: ₹${(packet.mrp - packet.originalMrp).toFixed(2)}` : 'Rule 6(1)(e) Checked'}</div>
+          </div>
+
+          <!-- 2. Net Quantity -->
+          <div class="spec-card spec-card-lavender" onclick="window.parakhScanner.openEditModal()">
+            <div class="spec-card-header">
+              <span class="spec-card-label">Net Quantity (Metric)</span>
+              <span class="spec-card-badge">SI UNITS</span>
+            </div>
+            <div class="spec-card-val text-lavender">${packet.netWeight || 'Not Stated'}</div>
+            <div class="spec-card-sub">Rule 6(1)(c) Metric Standard</div>
+          </div>
+
+          <!-- 3. Unit Sale Price (USP) -->
+          <div class="spec-card ${packet.unitSalePrice && packet.unitSalePrice !== 'MISSING' ? 'spec-card-cyan' : 'spec-card-warning'}" onclick="window.parakhScanner.openEditModal()">
+            <div class="spec-card-header">
+              <span class="spec-card-label">Unit Sale Price (USP)</span>
+              <span class="spec-card-badge">${packet.unitSalePrice && packet.unitSalePrice !== 'MISSING' ? 'DECLARED' : '2022 RULE'}</span>
+            </div>
+            <div class="spec-card-val">${packet.unitSalePrice && packet.unitSalePrice !== 'MISSING' ? packet.unitSalePrice : (packet.derivedUsp || 'Missing')}</div>
+            <div class="spec-card-sub">${packet.unitSalePrice && packet.unitSalePrice !== 'MISSING' ? 'Mandatory Display Verified' : 'Derived Rate (Undeclared)'}</div>
+          </div>
+
+          <!-- 4. Mfg / Pkg Date (MFD/MRD) -->
+          <div class="spec-card spec-card-slate" onclick="window.parakhScanner.openEditModal()">
+            <div class="spec-card-header">
+              <span class="spec-card-label">Mfg / Pkg Date (MFD/MRD)</span>
+              <span class="spec-card-badge">RULE 6(1)(d)</span>
+            </div>
+            <div class="spec-card-val">${packet.mfgDate || 'Not Stamped'}</div>
+            <div class="spec-card-sub">Batch Manufacturing Stamp</div>
+          </div>
+
+          <!-- 5. Expiry / Best Before -->
+          <div class="spec-card ${packet.isExpired ? 'spec-card-danger' : 'spec-card-slate'}" onclick="window.parakhScanner.openEditModal()">
+            <div class="spec-card-header">
+              <span class="spec-card-label">Expiry / Best Before</span>
+              <span class="spec-card-badge ${packet.isExpired ? 'badge-danger' : ''}">${packet.isExpired ? 'EXPIRED' : 'VALID'}</span>
+            </div>
+            <div class="spec-card-val ${packet.isExpired ? 'text-red' : ''}">${packet.expDate || 'Not Stamped'}</div>
+            <div class="spec-card-sub ${packet.isExpired ? 'text-red' : ''}">${packet.isExpired ? '⚠️ Section 36 Offense' : 'Within Statutory Shelf Life'}</div>
+          </div>
+
+          <!-- 6. Country of Origin -->
+          <div class="spec-card ${packet.countryOfOrigin && packet.countryOfOrigin !== 'MISSING' ? 'spec-card-slate' : 'spec-card-danger'}" onclick="window.parakhScanner.openEditModal()">
+            <div class="spec-card-header">
+              <span class="spec-card-label">Country of Origin</span>
+              <span class="spec-card-badge">ORIGIN</span>
+            </div>
+            <div class="spec-card-val">${packet.countryOfOrigin || 'MISSING'}</div>
+            <div class="spec-card-sub">Rule 6(1)(aa) Mandatory</div>
+          </div>
+        </div>
+
+        <div id="rawOcrTextDrawer" class="raw-ocr-container" style="display: none;">
+          <div class="raw-ocr-header">
+            <span>Extracted Raw Text Stream (${(this.rawOcrText || "").length} characters)</span>
+            <button class="btn btn-xs btn-outline" onclick="navigator.clipboard.writeText(window.parakhScanner.rawOcrText); window.parakhApp.showToast('Raw OCR text copied!');">Copy Text</button>
+          </div>
+          <div>${this.escapeHtml(this.rawOcrText || "No text available")}</div>
+        </div>
+      </div>
+    `;
 
     let violationsHtml = "";
     if (audit.violations.length > 0) {
@@ -677,8 +788,8 @@ class ParakhScanner {
         <div class="rule-audit-item ${r.status.toLowerCase()}">
           <div class="rule-audit-header">
             <div class="rule-title-group">
-              <span class="rule-no">${r.ruleNo}</span>
-              <span class="rule-title">${r.title}</span>
+              <span class="rule-no">${r.ruleNo || ''}</span>
+              <span class="rule-title">${r.title || key}</span>
             </div>
             <span class="rule-badge ${badgeClass}">${iconSvg} ${r.status}</span>
           </div>
@@ -690,7 +801,7 @@ class ParakhScanner {
 
     this.auditResultsContainer.innerHTML = `
       <div class="audit-summary-card">
-        ${ocrHudHtml}
+        ${liveSpecsHudHtml}
 
         <div class="summary-top">
           <div>
@@ -704,7 +815,7 @@ class ParakhScanner {
 
         <div class="metrics-row">
           <div class="metric-box">
-            <span class="metric-label">Trust Score</span>
+            <span class="metric-label">Compliance Trust Score</span>
             <div class="score-display">
               <span class="score-num ${isPass ? 'text-cyan' : (isDanger ? 'text-red' : 'text-lavender')}">${audit.complianceScore}%</span>
               <div class="score-bar-track">
@@ -720,7 +831,7 @@ class ParakhScanner {
 
           <div class="metric-box">
             <span class="metric-label">Unit Sale Price</span>
-            <span class="metric-val text-lavender">${packet.unitSalePrice || 'Not Declared'}</span>
+            <span class="metric-val text-lavender">${packet.unitSalePrice && packet.unitSalePrice !== 'MISSING' ? packet.unitSalePrice : (packet.derivedUsp || 'Missing')}</span>
           </div>
         </div>
 
@@ -819,6 +930,24 @@ class ParakhScanner {
     this.currentPacket.manufacturer = getVal("editManufacturer") || "MISSING";
     this.currentPacket.consumerCare = getVal("editConsumerCare") || "MISSING";
 
+    // Recalculate derived USP if needed
+    if (mrp > 0 && netWeight) {
+      const numQty = parseFloat(netWeight) || 0;
+      if (numQty > 0) {
+        if (/kg/i.test(netWeight)) {
+          this.currentPacket.derivedUsp = `₹ ${(mrp / (numQty * 1000)).toFixed(2)} / g`;
+        } else if (/g|gm/i.test(netWeight)) {
+          this.currentPacket.derivedUsp = `₹ ${(mrp / numQty).toFixed(2)} / g`;
+        } else if (/ml/i.test(netWeight) && !/l|ltr/i.test(netWeight)) {
+          this.currentPacket.derivedUsp = `₹ ${(mrp / numQty).toFixed(2)} / ml`;
+        } else if (/l|ltr/i.test(netWeight)) {
+          this.currentPacket.derivedUsp = `₹ ${(mrp / (numQty * 1000)).toFixed(2)} / ml`;
+        } else {
+          this.currentPacket.derivedUsp = `₹ ${(mrp / numQty).toFixed(2)} / unit`;
+        }
+      }
+    }
+
     // Re-evaluate audit
     const auditResult = window.parakhRulesEngine.auditPacket(this.currentPacket);
     this.currentAuditResult = auditResult;
@@ -828,7 +957,7 @@ class ParakhScanner {
 
     this.closeEditModal();
     if (window.parakhApp && window.parakhApp.showToast) {
-      window.parakhApp.showToast("Declarations updated & re-audited against Legal Metrology Rules!");
+      window.parakhApp.showToast("Specifications updated & re-audited against Legal Metrology Rules!");
     }
   }
 

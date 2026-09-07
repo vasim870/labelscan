@@ -44,7 +44,7 @@
   ],
   "rewrites": [
     {
-      "source": "/((?!assets/|js/|style.css|manifest.json|sw.js).*)",
+      "source": "/((?!api/|assets/|js/|style.css|manifest.json|sw.js).*)",
       "destination": "/index.html"
     }
   ]
