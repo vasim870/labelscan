@@ -28,7 +28,17 @@ const server = http.createServer((req, res) => {
 
     if (fs.existsSync(apiFilePath)) {
       let bodyData = '';
-      req.on('data', chunk => { bodyData += chunk; });
+      let bodySize = 0;
+      const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB to handle base64 images
+
+      req.on('data', chunk => {
+        bodySize += chunk.length;
+        if (bodySize > MAX_BODY_SIZE) {
+          req.destroy(new Error('Request body too large'));
+          return;
+        }
+        bodyData += chunk;
+      });
       req.on('end', () => {
         try {
           if (bodyData) {
@@ -55,6 +65,7 @@ const server = http.createServer((req, res) => {
       return res.end(JSON.stringify({ error: `API route /api/${routeName} not found` }));
     }
   }
+
 
   // Handle Static File Serving
   if (reqPath === '/' || reqPath === '') reqPath = '/index.html';

@@ -140,22 +140,18 @@ class ParakhScanner {
     reader.readAsDataURL(file);
   }
 
-  // Multi-pass Canvas Pre-processor to boost OCR legibility
+  // Multi-pass Canvas Pre-processor: Contrast Stretch + Adaptive Sharpen for product labels
   preprocessImage(imgElement) {
     const canvas = document.createElement("canvas");
     let width = imgElement.naturalWidth || imgElement.videoWidth || imgElement.width || 1200;
     let height = imgElement.naturalHeight || imgElement.videoHeight || imgElement.height || 900;
 
-    const maxDim = 1600;
-    if (width > maxDim || height > maxDim) {
-      if (width > height) {
-        height = Math.round((height * maxDim) / width);
-        width = maxDim;
-      } else {
-        width = Math.round((width * maxDim) / height);
-        height = maxDim;
-      }
-    }
+    // Scale up small images for better OCR, cap large ones
+    const minDim = 800;
+    const maxDim = 2000;
+    const scaleFactor = Math.min(maxDim / Math.max(width, height), Math.max(1, minDim / Math.min(width, height)));
+    width = Math.round(width * scaleFactor);
+    height = Math.round(height * scaleFactor);
 
     canvas.width = width;
     canvas.height = height;
@@ -165,24 +161,57 @@ class ParakhScanner {
     try {
       const imgData = ctx.getImageData(0, 0, width, height);
       const data = imgData.data;
+      const pixels = data.length / 4;
 
-      // Grayscale conversion and high-contrast stretching for ink labels
-      for (let i = 0; i < data.length; i += 4) {
-        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        const enhanced = (gray - 128) * 1.35 + 128;
-        const clamped = Math.max(0, Math.min(255, enhanced));
-        data[i] = clamped;
-        data[i + 1] = clamped;
-        data[i + 2] = clamped;
+      // Pass 1: Grayscale conversion
+      const gray = new Uint8ClampedArray(pixels);
+      for (let i = 0; i < pixels; i++) {
+        const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+        gray[i] = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
       }
+
+      // Pass 2: Compute histogram for Otsu thresholding
+      const hist = new Array(256).fill(0);
+      for (let i = 0; i < pixels; i++) hist[gray[i]]++;
+
+      // Find min/max for contrast stretching
+      let minVal = 255, maxVal = 0;
+      for (let i = 2; i < 254; i++) { // skip top/bottom 2 bins (noise)
+        if (hist[i] > pixels * 0.001) { // at least 0.1% occurrence
+          minVal = Math.min(minVal, i);
+          maxVal = Math.max(maxVal, i);
+        }
+      }
+      const range = maxVal - minVal || 1;
+
+      // Pass 3: Contrast stretch + sharpening
+      for (let i = 0; i < pixels; i++) {
+        // Contrast stretch to full [0, 255] range
+        let val = Math.round(((gray[i] - minVal) / range) * 255);
+        val = Math.max(0, Math.min(255, val));
+
+        // Sharpen: boost midtones contrast (S-curve enhancement)
+        if (val < 128) {
+          val = Math.round(val * 0.85); // darken shadows
+        } else {
+          val = Math.round(128 + (val - 128) * 1.15); // brighten highlights
+        }
+        val = Math.max(0, Math.min(255, val));
+
+        data[i * 4] = val;
+        data[i * 4 + 1] = val;
+        data[i * 4 + 2] = val;
+      }
+
       ctx.putImageData(imgData, 0, 0);
-      return canvas.toDataURL("image/jpeg", 0.9);
+      return canvas.toDataURL("image/jpeg", 0.95);
     } catch (_) {
-      return imgElement.src;
+      return imgElement.src || imgElement;
     }
   }
 
-  // Real OCR Processing Pipeline with Tesseract.js & Backend Fallback
+
+  // Real OCR Processing Pipeline with Tesseract.js v5 + Server-side OCR Fallback
   async processImageWithOCR(imageSrc, hintName) {
     this.isOcrCustom = true;
     this.clearAuditView();
@@ -192,44 +221,58 @@ class ParakhScanner {
     }
 
     this.updateStatus("Multi-Pass Image Contrast Normalization...", "cyan");
-    await this.delay(250);
+    await this.delay(200);
 
+    // --- Build enhanced pre-processed image for OCR ---
     const previewImg = document.getElementById("packetImagePreview");
     let ocrInput = imageSrc;
-    if (previewImg && previewImg.complete) {
+    if (previewImg && (previewImg.complete || previewImg.naturalWidth > 0)) {
       ocrInput = this.preprocessImage(previewImg);
     }
 
     let recognizedText = "";
-    let lines = [];
-    let words = [];
 
-    // 1. Run Neural OCR (Tesseract.js)
+    // 1. Run Tesseract.js v5 OCR with correct worker config
     if (typeof Tesseract !== "undefined") {
       try {
-        this.updateStatus("Neural OCR: Initializing Tesseract Recognizer...", "cyan");
-        const workerResult = await Tesseract.recognize(ocrInput, 'eng', {
+        this.updateStatus("Neural OCR: Loading Language Model...", "cyan");
+
+        // Tesseract.js v5 createWorker with explicit CDN paths (avoids 404)
+        const worker = await Tesseract.createWorker('eng', 1, {
+          workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js',
+          langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5/tesseract-core-simd-lstm.wasm.js',
           logger: (m) => {
-            if (m.status === 'recognizing text') {
+            if (m.status === 'recognizing text' || m.status === 'loading language traineddata') {
               const pct = Math.round((m.progress || 0) * 100);
-              this.updateStatus(`Neural OCR: Extracting Label Text (${pct}%)...`, "cyan");
+              const label = m.status === 'recognizing text' ? 'OCR Pass' : 'Loading Model';
+              this.updateStatus(`Neural OCR: ${label} (${pct}%)...`, "cyan");
             }
           }
         });
 
-        if (workerResult && workerResult.data) {
-          recognizedText = workerResult.data.text || "";
-          lines = workerResult.data.lines || [];
-          words = workerResult.data.words || [];
+        // PSM 11 = Sparse text - best for product labels with scattered text blocks
+        await worker.setParameters({
+          tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,/:- @₹Rs()&+%'
+        });
+
+        const result = await worker.recognize(ocrInput);
+        if (result && result.data) {
+          recognizedText = result.data.text || "";
         }
+        await worker.terminate();
+        this.updateStatus("Neural OCR: Text Extraction Complete ✓", "cyan");
       } catch (ocrErr) {
         console.warn("Tesseract OCR error:", ocrErr);
+        this.updateStatus("OCR: Switching to Server-Side Analysis...", "lavender");
       }
     }
 
     this.rawOcrText = recognizedText.trim();
+    console.log("[OCR Raw Text]\n", this.rawOcrText);
 
-    // 2. Query Backend API /api/scan for hybrid verification
+    // 2. Send BOTH the OCR text AND the image to the backend for server-side analysis
     this.updateStatus("Legal Metrology Parser: Extracting 9 Mandatory Declarations...", "lavender");
     let parsedData = null;
 
@@ -237,17 +280,25 @@ class ParakhScanner {
       const apiRes = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: this.rawOcrText, name: hintName })
+        body: JSON.stringify({
+          text: this.rawOcrText,
+          image: ocrInput,   // <-- send image for server-side OCR if text is empty
+          name: hintName
+        })
       });
 
       if (apiRes.ok) {
         const apiJson = await apiRes.json();
         if (apiJson && apiJson.extractedData) {
           parsedData = apiJson.extractedData;
+          // If server performed its own OCR, update our raw text
+          if (apiJson.serverOcrText) {
+            this.rawOcrText = this.rawOcrText || apiJson.serverOcrText;
+          }
         }
       }
-    } catch (_) {
-      // Offline fallback
+    } catch (fetchErr) {
+      console.warn("Backend API error:", fetchErr);
     }
 
     // Client-side fallback parser if backend was unreachable
