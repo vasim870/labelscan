@@ -581,6 +581,95 @@
     </div>
   </div>
 
+  <!-- ====================================================================
+       MODAL 3: VERIFY & ADJUST EXTRACTED DECLARATIONS MODAL
+       ==================================================================== -->
+  <div class="modal-backdrop" id="editDeclarationsModal">
+    <div class="modal-sheet-dialog" style="max-width: 620px;">
+      <div class="modal-header-bar">
+        <h3>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00F0FF" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          Verify / Adjust Detected Label Declarations
+        </h3>
+        <button class="modal-close-btn" type="button" onclick="window.parakhScanner.closeEditModal()">&times;</button>
+      </div>
+
+      <form onsubmit="window.parakhScanner.saveEditedDeclarations(event)">
+        <div class="modal-body-scroll" style="display: flex; flex-direction: column; gap: 0.9rem;">
+          <p style="font-size: 0.82rem; color: var(--text-muted); margin: 0;">
+            Review or refine declarations extracted from your physical product photo. You can edit any field below (e.g. if the photo was angled or smudged) and re-run the Legal Metrology audit instantly.
+          </p>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem;">
+            <div class="form-group">
+              <label for="editPacketName">Product / Commodity Name *</label>
+              <input type="text" id="editPacketName" class="parakh-input" required />
+            </div>
+
+            <div class="form-group">
+              <label for="editCategory">Category / Generic Identity</label>
+              <input type="text" id="editCategory" class="parakh-input" />
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.8rem;">
+            <div class="form-group">
+              <label for="editMrp">Printed MRP (₹) *</label>
+              <input type="number" step="0.01" id="editMrp" class="parakh-input" placeholder="e.g. 55.00" required />
+            </div>
+
+            <div class="form-group">
+              <label for="editOriginalMrp">Factory MRP (if stickered)</label>
+              <input type="number" step="0.01" id="editOriginalMrp" class="parakh-input" placeholder="e.g. 55.00" />
+            </div>
+
+            <div class="form-group">
+              <label for="editNetWeight">Net Quantity (Metric) *</label>
+              <input type="text" id="editNetWeight" class="parakh-input" placeholder="e.g. 200 g or 1 L" required />
+            </div>
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.8rem;">
+            <div class="form-group">
+              <label for="editUsp">Unit Sale Price (USP)</label>
+              <input type="text" id="editUsp" class="parakh-input" placeholder="e.g. ₹0.28 / g (or MISSING)" />
+            </div>
+
+            <div class="form-group">
+              <label for="editMfgDate">Mfg / Pkg Date</label>
+              <input type="text" id="editMfgDate" class="parakh-input" placeholder="e.g. 02/2026" />
+            </div>
+
+            <div class="form-group">
+              <label for="editExpDate">Expiry / Best Before</label>
+              <input type="text" id="editExpDate" class="parakh-input" placeholder="e.g. 08/2026" />
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="editCountryOrigin">Country of Origin *</label>
+            <input type="text" id="editCountryOrigin" class="parakh-input" placeholder="e.g. India (or MISSING)" required />
+          </div>
+
+          <div class="form-group">
+            <label for="editManufacturer">Manufacturer / Packer Details & Address *</label>
+            <textarea id="editManufacturer" class="parakh-input" rows="2" placeholder="Full name and physical address with PIN code"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="editConsumerCare">Consumer Care Phone / Email / Grievance Officer</label>
+            <input type="text" id="editConsumerCare" class="parakh-input" placeholder="e.g. 1800-425-9999 | care@brand.com" />
+          </div>
+        </div>
+
+        <div class="modal-footer-bar">
+          <button type="button" class="btn btn-outline" onclick="window.parakhScanner.closeEditModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save & Re-Audit Commodity</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Global Toast -->
   <div id="parakhGlobalToast" class="parakh-toast"></div>
 
@@ -601,6 +690,9 @@
 
   <!-- Leaflet JS for GIS Map -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- Tesseract.js for Real-Time In-Browser Optical Character Recognition (OCR) -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <!-- Application Modules -->
   <script src="js/data.js"></script>
